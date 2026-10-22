@@ -1,0 +1,18 @@
+# Secrets
+.env
+
+# Personal chat export with the customer bot (requirements are in docs/requirements.md)
+ChatExport_*/
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+.pytest_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# IDE
+.idea/
+.vscode/

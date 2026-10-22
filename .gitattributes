@@ -1,0 +1,5 @@
+# Source files use LF everywhere, also on Windows checkouts (they run in Linux containers)
+* text=auto eol=lf
+
+# Archive documents are stored byte-for-byte: the bot identifies them by SHA-256
+archive/** binary
