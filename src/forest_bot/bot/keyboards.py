@@ -28,6 +28,16 @@ class DocumentPlace(CallbackData, prefix="dp"):
 
 class DeleteDocument(CallbackData, prefix="del"):
     id: int
+    page: int  # the /my_docs page to show again after deleting
+
+
+class OwnDocumentsPage(CallbackData, prefix="own"):
+    page: int
+
+
+# Titles are up to 150 characters: a page stays far below Telegram's 4096 characters and
+# 100 buttons per message (review #3)
+OWN_DOCUMENTS_PER_PAGE = 10
 
 
 CANCEL = "cancel"
@@ -52,10 +62,18 @@ def document_places_keyboard(waiting_id: int) -> InlineKeyboardMarkup:
     return builder.as_markup()
 
 
-def delete_keyboard(docs: list[DocumentInfo]) -> InlineKeyboardMarkup:
+def own_documents_keyboard(docs: list[DocumentInfo], page: int, pages: int) -> InlineKeyboardMarkup:
+    """Delete buttons for one page of the animal's documents, plus ◀ ▶ between pages."""
     builder = InlineKeyboardBuilder()
     for doc in docs:
         label = f"🗑 {doc.title} · {PLACES[doc.place_code].name}"
-        builder.button(text=label, callback_data=DeleteDocument(id=doc.id))
-    builder.adjust(1)
+        builder.button(text=label, callback_data=DeleteDocument(id=doc.id, page=page))
+    arrows = 0
+    if page > 0:
+        builder.button(text="◀", callback_data=OwnDocumentsPage(page=page - 1))
+        arrows += 1
+    if page < pages - 1:
+        builder.button(text="▶", callback_data=OwnDocumentsPage(page=page + 1))
+        arrows += 1
+    builder.adjust(*[1] * len(docs), *([arrows] if arrows else []))
     return builder.as_markup()

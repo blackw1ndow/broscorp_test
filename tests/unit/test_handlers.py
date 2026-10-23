@@ -12,12 +12,15 @@ from forest_bot.bot import texts
 from forest_bot.bot.handlers import commands, documents, fallback, names, questions
 from forest_bot.bot.keyboards import (
     CANCEL,
+    DeleteDocument,
     Dialog,
     DocumentPlace,
+    OwnDocumentsPage,
     QuestionPlace,
 )
 from forest_bot.config import KYIV_TZ
 from forest_bot.db.repositories import waiting
+from forest_bot.db.repositories.documents import DocumentInfo
 from forest_bot.forest import PLACES
 from forest_bot.ingestion.service import (
     MAX_FILE_SIZE,
@@ -25,6 +28,7 @@ from forest_bot.ingestion.service import (
     NeedsSplit,
     PendingDocument,
     Saved,
+    TooLong,
 )
 from forest_bot.qa.answer import NOT_FOUND, Answer, Source
 from forest_bot.qa.router import Route
@@ -222,6 +226,14 @@ async def test_mixed_document_is_not_saved(mocker, state, bot, pool):
     assert await state.get_state() is None
 
 
+async def test_too_long_document_is_refused(mocker, state, bot, pool):
+    ingestion = mocker.AsyncMock()
+    ingestion.receive.return_value = TooLong()
+    message = _message(mocker, document=_document(mocker))
+    await documents.on_document(message, state, bot, ingestion, pool, user_name="Їжачок")
+    assert _replies(message)[-1] == texts.TOO_LONG
+
+
 async def test_unclear_place_shows_the_place_buttons(mocker, state, bot, pool, waiting_docs):
     ingestion = mocker.AsyncMock()
     ingestion.receive.return_value = NeedsPlace(_pending(), "Під горобиною")
@@ -342,6 +354,57 @@ async def test_start_without_waiting_documents_only_greets(mocker, state, pool, 
     message = _message(mocker, text="/start")
     await commands.on_start(message, state, pool)
     assert _replies(message) == [texts.START]
+
+
+def _own_docs(count: int) -> list[DocumentInfo]:
+    # The longest titles the bot keeps (150 characters)
+    return [
+        DocumentInfo(
+            i, f"{i:03} " + "Д" * 146, "тип", "pid_dubom", "user", "Їжачок", datetime.now(KYIV_TZ)
+        )
+        for i in range(1, count + 1)
+    ]
+
+
+def _buttons(markup) -> list[str]:
+    return [b.text for row in markup.inline_keyboard for b in row]
+
+
+async def test_many_own_documents_are_shown_page_by_page(mocker, pool):
+    # Review #3: one message with every document breaks Telegram's 4096 chars / 100 buttons
+    mocker.patch.object(commands.documents, "list_active", return_value=_own_docs(25))
+    message = _message(mocker, text="/my_docs")
+
+    await commands.on_my_docs(message, pool)
+
+    [call] = message.answer.call_args_list
+    text, markup = call.args[0], call.kwargs["reply_markup"]
+    assert len(text) <= texts.TELEGRAM_LIMIT
+    assert "001 " in text and "010 " in text and "011 " not in text
+    assert sum(b.startswith("🗑") for b in _buttons(markup)) == 10
+    assert "▶" in _buttons(markup)
+
+    pressed = OwnDocumentsPage.unpack(_button(message, "▶"))
+    callback = _callback(mocker, _message(mocker))
+    await commands.on_own_documents_page(callback, pressed, pool)
+
+    shown = callback.message.edit_text.call_args.args[0]
+    assert "011 " in shown and "020 " in shown and "001 " not in shown
+
+
+async def test_deleting_keeps_the_list_on_its_page(mocker, pool):
+    remaining = _own_docs(25)
+    deleted = remaining.pop(14)  # from the second page
+    mocker.patch.object(commands.documents, "delete_own", return_value=(deleted, None))
+    mocker.patch.object(commands.documents, "list_active", return_value=remaining)
+    # `async with conn.transaction()` needs a context manager, not a coroutine
+    pool.acquire.return_value.__aenter__.return_value.transaction = mocker.MagicMock()
+    callback = _callback(mocker, _message(mocker))
+
+    await commands.on_delete(callback, DeleteDocument(id=deleted.id, page=1), pool)
+
+    shown = callback.message.edit_text.call_args.args[0]
+    assert "011 " in shown and "021 " in shown and "001 " not in shown
 
 
 # --- questions -------------------------------------------------------------------------------

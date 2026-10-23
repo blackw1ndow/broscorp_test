@@ -2,12 +2,24 @@ import asyncpg
 
 
 async def ensure_user(conn: asyncpg.Connection, telegram_id: int) -> str | None:
-    """Creates the user on first contact. Returns the real name (R15) if it is known."""
+    """Creates the user on first contact. Returns the real name (R15) if it is known.
+
+    Runs for every update, so a known user is only read: DO UPDATE would write a new row
+    version each time. A new user has no name yet, so losing an insert race returns None too.
+    """
     return await conn.fetchval(
         """
-        INSERT INTO users (telegram_id) VALUES ($1)
-        ON CONFLICT (telegram_id) DO UPDATE SET telegram_id = EXCLUDED.telegram_id
-        RETURNING display_name
+        WITH existing AS (
+            SELECT display_name FROM users WHERE telegram_id = $1
+        ), inserted AS (
+            INSERT INTO users (telegram_id)
+            SELECT $1 WHERE NOT EXISTS (SELECT 1 FROM existing)
+            ON CONFLICT (telegram_id) DO NOTHING
+            RETURNING display_name
+        )
+        SELECT display_name FROM existing
+        UNION ALL
+        SELECT display_name FROM inserted
         """,
         telegram_id,
     )

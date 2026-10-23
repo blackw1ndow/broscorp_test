@@ -1,5 +1,6 @@
 """Text extraction from PDF, DOCX and TXT. Scanned PDF pages go through OCR (D22)."""
 
+import codecs
 import io
 import logging
 import re
@@ -41,18 +42,28 @@ class UnsupportedFormatError(ValueError):
     pass
 
 
-def extract_text(file_name: str, data: bytes) -> ExtractedText:
+class TooManyScannedPagesError(ValueError):
+    def __init__(self, pages: int) -> None:
+        super().__init__(f"{pages} scanned pages")
+        self.pages = pages
+
+
+def extract_text(file_name: str, data: bytes, max_ocr_pages: int | None = None) -> ExtractedText:
+    """`max_ocr_pages` bounds the OCR work: seconds of CPU per scanned page."""
     extension = Path(file_name).suffix.lower()
     if extension == ".txt":
         return ExtractedText(_clean(_decode_txt(data)), ExtractionMethod.TEXT)
     if extension == ".docx":
         return ExtractedText(_clean(_docx_text(data)), ExtractionMethod.TEXT)
     if extension == ".pdf":
-        return _pdf_text(data)
+        return _pdf_text(data, max_ocr_pages)
     raise UnsupportedFormatError(extension or file_name)
 
 
 def _decode_txt(data: bytes) -> str:
+    # Notepad's «Unicode» is UTF-16 with a BOM; as cp1251 it would be full of NULs
+    if data.startswith((codecs.BOM_UTF16_LE, codecs.BOM_UTF16_BE)):
+        return data.decode("utf-16")
     try:
         return data.decode("utf-8-sig")
     except UnicodeDecodeError:
@@ -69,7 +80,7 @@ def _docx_text(data: bytes) -> str:
     return "\n".join(parts)
 
 
-def _pdf_text(data: bytes) -> ExtractedText:
+def _pdf_text(data: bytes, max_ocr_pages: int | None) -> ExtractedText:
     reader = PdfReader(io.BytesIO(data))
     pages: list[str] = []
     ocr_pages: list[int] = []
@@ -79,6 +90,8 @@ def _pdf_text(data: bytes) -> ExtractedText:
             ocr_pages.append(index)
         pages.append(text)
 
+    if max_ocr_pages is not None and len(ocr_pages) > max_ocr_pages:
+        raise TooManyScannedPagesError(len(ocr_pages))
     if ocr_pages:
         pdf = pypdfium2.PdfDocument(data)
         try:
@@ -157,7 +170,8 @@ def _drop_noise_lines(text: str) -> str:
 
 
 def _clean(text: str) -> str:
-    text = text.replace("\r\n", "\n").replace("­", "")
+    # Postgres text and jsonb reject NUL, and PDFs sometimes contain it
+    text = text.replace("\r\n", "\n").replace("­", "").replace("\x00", "")
     text = re.sub(r"(\w)-\n(\w)", r"\1\2", text)  # words hyphenated across lines
     text = re.sub(r"[ \t]+", " ", text)
     text = re.sub(r" *\n *", "\n", text)

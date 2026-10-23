@@ -1,12 +1,20 @@
+import asyncio
+import threading
+import time
+
 import pytest
 
+from forest_bot.ingestion import service as service_module
+from forest_bot.ingestion.extract import ExtractedText, ExtractionMethod, TooManyScannedPagesError
 from forest_bot.ingestion.service import (
+    MAX_TEXT_CHARS,
     Broken,
     IngestionService,
     NeedsPlace,
     NeedsSplit,
     NoText,
     PendingDocument,
+    TooLong,
     guess_title,
     section_headings,
 )
@@ -48,6 +56,40 @@ async def test_read_empty_document(service):
 
 async def test_read_broken_document(service):
     assert isinstance(await service.read("зламаний.docx", b"not a zip", None), Broken)
+
+
+async def test_read_too_long_document(service):
+    # Review #5: millions of characters would become thousands of chunks to embed
+    text = "Порада про гриби. " * (MAX_TEXT_CHARS // 10)
+    assert isinstance(await service.read("путівник.txt", text.encode(), None), TooLong)
+
+
+async def test_read_too_many_scanned_pages(service, mocker):
+    mocker.patch.object(service_module, "extract_text", side_effect=TooManyScannedPagesError(40))
+    assert isinstance(await service.read("скан.pdf", b"%PDF", None), TooLong)
+
+
+async def test_at_most_two_documents_are_read_at_once(service, mocker):
+    # Review #5: reading shares the thread pool with every question's embedding
+    running = 0
+    most = 0
+    lock = threading.Lock()
+
+    def slow_extract(file_name, data, max_ocr_pages=None):
+        nonlocal running, most
+        with lock:
+            running += 1
+            most = max(most, running)
+        time.sleep(0.05)
+        with lock:
+            running -= 1
+        return ExtractedText("Порада", ExtractionMethod.TEXT)
+
+    mocker.patch.object(service_module, "extract_text", side_effect=slow_extract)
+
+    await asyncio.gather(*(service.read(f"{i}.txt", b"x", None) for i in range(5)))
+
+    assert most == 2
 
 
 async def test_one_place_from_the_llm(service, llm):

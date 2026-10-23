@@ -4,11 +4,17 @@ import asyncpg
 from aiogram import Router
 from aiogram.filters import Command, CommandStart
 from aiogram.fsm.context import FSMContext
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from forest_bot.bot import texts
-from forest_bot.bot.keyboards import DeleteDocument, delete_keyboard
+from forest_bot.bot.keyboards import (
+    OWN_DOCUMENTS_PER_PAGE,
+    DeleteDocument,
+    OwnDocumentsPage,
+    own_documents_keyboard,
+)
 from forest_bot.db.repositories import documents, waiting
+from forest_bot.db.repositories.documents import DocumentInfo
 
 router = Router(name="commands")
 
@@ -47,7 +53,30 @@ async def on_my_docs(message: Message, pool: asyncpg.Pool) -> None:
     if not docs:
         await message.answer(texts.NO_OWN_DOCUMENTS)
         return
-    await message.answer(texts.own_documents(docs), reply_markup=delete_keyboard(docs))
+    text, markup = _own_page(docs, 0)
+    await message.answer(text, reply_markup=markup)
+
+
+@router.callback_query(OwnDocumentsPage.filter())
+async def on_own_documents_page(
+    callback: CallbackQuery, callback_data: OwnDocumentsPage, pool: asyncpg.Pool
+) -> None:
+    async with pool.acquire() as conn:
+        docs = await documents.list_active(conn, author_id=callback.from_user.id)
+    await callback.answer()
+    if not docs:
+        await callback.message.edit_text(texts.NO_OWN_DOCUMENTS)
+        return
+    text, markup = _own_page(docs, callback_data.page)
+    await callback.message.edit_text(text, reply_markup=markup)
+
+
+def _own_page(docs: list[DocumentInfo], page: int) -> tuple[str, InlineKeyboardMarkup]:
+    """One page of /my_docs; a page past the end (after deleting) shows the last one."""
+    pages = -(-len(docs) // OWN_DOCUMENTS_PER_PAGE)
+    page = min(max(page, 0), pages - 1)
+    shown = docs[page * OWN_DOCUMENTS_PER_PAGE : (page + 1) * OWN_DOCUMENTS_PER_PAGE]
+    return texts.own_documents(shown, page, pages), own_documents_keyboard(shown, page, pages)
 
 
 @router.callback_query(DeleteDocument.filter())
@@ -65,9 +94,8 @@ async def on_delete(
         return
     await callback.answer()
     if remaining:
-        await callback.message.edit_text(
-            texts.own_documents(remaining), reply_markup=delete_keyboard(remaining)
-        )
+        text, markup = _own_page(remaining, callback_data.page)
+        await callback.message.edit_text(text, reply_markup=markup)
     else:
         await callback.message.edit_text(texts.NO_OWN_DOCUMENTS)
     await callback.message.answer(texts.document_deleted(deleted.title, restored))

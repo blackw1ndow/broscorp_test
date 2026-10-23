@@ -25,3 +25,22 @@ def test_huge_paragraph_is_split_by_sentences():
     chunks = chunk_text("Т", text)
     assert len(chunks) > 1
     assert all(len(chunk) < TARGET_CHUNK_CHARS * 2 for chunk in chunks)
+
+
+def test_table_without_punctuation_is_still_split():
+    # Review #4: a DOCX table joins rows with single newlines and has no sentence ends.
+    # One huge chunk would push the answer prompt past Groq's request limit.
+    rows = [
+        f"Рукавичка {i} | Чергує Кабан | Приносить 3 жолуді | Щосуботи зранку" for i in range(200)
+    ]
+    chunks = chunk_text("Графік", "\n".join(rows))
+    assert len(chunks) > 1
+    assert all(len(chunk) < TARGET_CHUNK_CHARS * 2 for chunk in chunks)
+    for i in (0, 99, 199):
+        assert any(f"Рукавичка {i} |" in chunk for chunk in chunks)
+
+
+def test_text_without_any_spaces_is_still_split():
+    chunks = chunk_text("Т", "ґ" * 10_000)
+    assert all(len(chunk) < TARGET_CHUNK_CHARS * 2 for chunk in chunks)
+    assert sum(chunk.count("ґ") for chunk in chunks) >= 10_000

@@ -1,7 +1,12 @@
 import pytest
 
 from forest_bot.ingestion import extract
-from forest_bot.ingestion.extract import ExtractionMethod, UnsupportedFormatError, extract_text
+from forest_bot.ingestion.extract import (
+    ExtractionMethod,
+    TooManyScannedPagesError,
+    UnsupportedFormatError,
+    extract_text,
+)
 from tests.conftest import ARCHIVE_DIR
 
 
@@ -18,6 +23,26 @@ def test_txt_utf8_with_bom():
 def test_txt_cp1251():
     result = extract_text("a.TXT", "Їжак знає гриби".encode("cp1251"))
     assert result.text == "Їжак знає гриби"
+
+
+def test_txt_utf16_from_windows_notepad():
+    # Review #7: «Unicode» in Notepad is UTF-16 with a BOM; read as cp1251 it is full of NULs
+    result = extract_text("a.txt", "Їжак знає гриби\r\nПід дубом".encode("utf-16"))
+    assert result.text == "Їжак знає гриби\nПід дубом"
+
+
+def test_nul_characters_never_reach_the_database():
+    # Postgres text and jsonb reject U+0000
+    result = extract_text("a.txt", "Внесок\x00 — 3 жолуді".encode())
+    assert result.text == "Внесок — 3 жолуді"
+
+
+def test_too_many_scanned_pages_are_refused_before_ocr(mocker):
+    # Review #5: OCR takes seconds of CPU per page; an animal's upload has a page budget
+    ocr = mocker.patch.object(extract, "ocr_image")
+    with pytest.raises(TooManyScannedPagesError):
+        extract_text("x.pdf", _archive("Членські внески рукавички У соснах.pdf"), max_ocr_pages=0)
+    ocr.assert_not_called()
 
 
 def test_docx_from_archive():

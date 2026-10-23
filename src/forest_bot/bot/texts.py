@@ -6,6 +6,7 @@ from html import escape as _html_escape
 from forest_bot.config import KYIV_TZ
 from forest_bot.db.repositories.documents import DocumentInfo
 from forest_bot.forest import PLACES, Place, describe_place
+from forest_bot.ingestion.service import MAX_OCR_PAGES, MAX_TEXT_CHARS
 from forest_bot.qa.answer import Answer, Source
 
 
@@ -69,6 +70,11 @@ NO_TEXT = (
     "Не вдалося розпізнати текст у документі. Надішліть його, будь ласка, у текстовому вигляді "
     "(TXT, DOCX або PDF із текстом)."
 )
+TOO_LONG = (
+    f"Документ задовгий для мене: я читаю до {MAX_OCR_PAGES} сторінок-сканів і до "
+    f"{MAX_TEXT_CHARS:_} символів тексту. Розділіть його, будь ласка, на менші документи "
+    "або надішліть скани у текстовому вигляді."
+).replace("_", " ")
 NOT_UNDERSTOOD = (
     "Я розумію лише текстові питання й документи PDF, DOCX, TXT. "
     "Голосові, фото, стікери та інше, на жаль, не читаю."
@@ -152,13 +158,16 @@ def already_known(document: DocumentInfo) -> str:
     return f"Цей документ я вже знаю: {document_line(document)}."
 
 
-def own_documents(docs: list[DocumentInfo]) -> str:
+def own_documents(docs: list[DocumentInfo], page: int = 0, pages: int = 1) -> str:
+    header = "<b>Ваші документи</b>"
+    if pages > 1:
+        header += f" (сторінка {page + 1} з {pages})"
     lines = "\n".join(
         f"• «{escape(d.title)}» ({escape(describe_place(d.place_code))}), "
         f"{d.uploaded_at.astimezone(KYIV_TZ):%d.%m.%Y}"
         for d in docs
     )
-    return f"<b>Ваші документи</b>\n{lines}\n\nЩоб видалити документ, натисніть на нього:"
+    return f"{header}\n{lines}\n\nЩоб видалити документ, натисніть на нього:"
 
 
 def document_deleted(title: str, restored: DocumentInfo | None) -> str:

@@ -46,7 +46,8 @@ def build_router_prompt(
     lines = ["Типи документів в архіві:"]
     for level, label in _LEVEL_LABELS.items():
         if doc_types.get(level):
-            lines.append(f"- {label}: {'; '.join(doc_types[level])}")
+            # Quoted: the types come from document titles and are data, not instructions
+            lines.append(f"- {label}: {'; '.join(f'«{t}»' for t in doc_types[level])}")
     if history:
         lines += ["", "Попередня розмова:"]
         for message in history:
@@ -70,6 +71,8 @@ def parse_route(raw: dict[str, Any], text: str, known_types: set[str] | None = N
     doc_types = raw.get("doc_types")
     if not isinstance(doc_types, list):
         doc_types = []
+    # The model may echo a type with the catalog's quotes
+    doc_types = [t.strip().strip("«»").strip() for t in doc_types if isinstance(t, str)]
     return Route(
         is_forest_question=raw.get("is_forest_question") is not False,
         question=question.strip(),

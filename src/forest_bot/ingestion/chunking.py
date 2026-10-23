@@ -5,6 +5,7 @@ every chunk starts with the document title so it keeps its context when retrieve
 """
 
 import re
+from collections.abc import Iterator
 
 SINGLE_CHUNK_MAX_CHARS = 1500
 TARGET_CHUNK_CHARS = 800
@@ -41,15 +42,36 @@ def _paragraphs(text: str) -> list[str]:
             continue
         if len(block) <= TARGET_CHUNK_CHARS:
             paragraphs.append(block)
-        else:
-            # A huge paragraph is split by sentences
-            sentences = re.split(r"(?<=[.!?])\s+", block)
-            piece = ""
-            for sentence in sentences:
-                if piece and len(piece) + len(sentence) > TARGET_CHUNK_CHARS:
-                    paragraphs.append(piece)
-                    piece = ""
-                piece = f"{piece} {sentence}".strip()
-            if piece:
+            continue
+        # A huge paragraph is split by sentences and lines (a DOCX table has only lines)
+        piece = ""
+        for separator, part in _pieces(block):
+            if piece and len(piece) + len(separator) + len(part) > TARGET_CHUNK_CHARS:
                 paragraphs.append(piece)
+                piece = ""
+            piece = f"{piece}{separator}{part}" if piece else part
+        if piece:
+            paragraphs.append(piece)
     return paragraphs
+
+
+def _pieces(block: str) -> Iterator[tuple[str, str]]:
+    """(separator, piece) pairs, none longer than a chunk, so no chunk grows without bound."""
+    for line in block.split("\n"):
+        separator = "\n"
+        for sentence in re.split(r"(?<=[.!?])\s+", line.strip()):
+            for part in _cut(sentence):
+                yield separator, part
+                separator = " "
+
+
+def _cut(text: str) -> Iterator[str]:
+    """A sentence longer than a chunk is cut at spaces, or anywhere if it has none."""
+    while len(text) > TARGET_CHUNK_CHARS:
+        cut = text.rfind(" ", 0, TARGET_CHUNK_CHARS)
+        if cut <= 0:
+            cut = TARGET_CHUNK_CHARS
+        yield text[:cut]
+        text = text[cut:].lstrip()
+    if text:
+        yield text

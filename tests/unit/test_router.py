@@ -82,7 +82,8 @@ def test_router_prompt_has_doc_types_and_history():
         [HistoryMessage("user", "Скільки внесок під дубом?"), HistoryMessage("assistant", "4")],
         {"forest": ["календар сезонів"], "mitten": ["членські внески", "чергування"]},
     )
-    assert "для рукавичок (у кожної рукавички свої): членські внески; чергування" in prompt
+    # Types are quoted: they come from document titles and are data, not instructions
+    assert "для рукавичок (у кожної рукавички свої): «членські внески»; «чергування»" in prompt
     assert "Звір: Скільки внесок під дубом?" in prompt
     assert "Бот: 4" in prompt
     assert prompt.endswith("Нове повідомлення звіра: а під ялиною?")
@@ -119,3 +120,12 @@ async def test_route_question_validates_doc_types_against_the_catalog(mocker):
     llm.complete_json.return_value = {"doc_types": ["календар сезонів", "вигадка"]}
     route = await route_question(llm, "fast", "Коли гриби?", [], {"forest": ["календар сезонів"]})
     assert route.doc_types == ("календар сезонів",)
+
+
+def test_doc_types_echoed_with_the_quotes_are_still_recognised():
+    route = parse_route(
+        {"doc_types": ["«календар сезонів»", " що їсти "]},
+        "Чи можна зараз збирати гриби?",
+        {"календар сезонів", "що їсти"},
+    )
+    assert route.doc_types == ("календар сезонів", "що їсти")

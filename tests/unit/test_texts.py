@@ -55,3 +55,8 @@ def test_deleted_document_says_what_is_active_again():
 
 def test_names_are_escaped():
     assert texts.name_saved("<Їжак>").startswith("Записав: &lt;Їжак&gt;.")
+
+
+def test_too_long_names_the_limits_readably():
+    assert "до 20 сторінок-сканів і до 200 000 символів" in texts.TOO_LONG
+    assert "Розділіть його, будь ласка, на менші документи" in texts.TOO_LONG

@@ -123,17 +123,39 @@ async def list_active(
     return [DocumentInfo(**dict(row)) for row in rows]
 
 
+# D29: the catalog goes into the prompt of every question. Types made from animals' titles are
+# bounded: only the most recent ones, and only short ones (the longest archive type is ~40 chars)
+ROUTER_USER_TYPES = 20
+ROUTER_TYPE_MAX_CHARS = 60
+
+
 async def doc_types_by_level(conn: asyncpg.Connection) -> dict[str, list[str]]:
     """Active document types grouped by place level: tells the router which advice differs
-    between places (R10a)."""
+    between places (R10a). Archive types always; types only animals use, within D29 bounds."""
     rows = await conn.fetch(
         """
-        SELECT p.level, d.doc_type
-        FROM documents d JOIN places p ON p.code = d.place_code
-        WHERE d.status = 'active'
-        GROUP BY p.level, d.doc_type
-        ORDER BY p.level, d.doc_type
-        """
+        WITH types AS (
+            SELECT p.level, d.doc_type, max(d.uploaded_at) AS latest,
+                   EXISTS (
+                       SELECT 1 FROM documents a
+                       WHERE a.source = 'archive' AND a.doc_type = d.doc_type
+                   ) AS from_archive
+            FROM documents d JOIN places p ON p.code = d.place_code
+            WHERE d.status = 'active'
+            GROUP BY p.level, d.doc_type
+        ), user_types AS (
+            SELECT level, doc_type FROM types
+            WHERE NOT from_archive AND length(doc_type) <= $2
+            ORDER BY latest DESC
+            LIMIT $1
+        )
+        SELECT level, doc_type FROM types WHERE from_archive
+        UNION
+        SELECT level, doc_type FROM user_types
+        ORDER BY level, doc_type
+        """,
+        ROUTER_USER_TYPES,
+        ROUTER_TYPE_MAX_CHARS,
     )
     result: dict[str, list[str]] = {}
     for row in rows:

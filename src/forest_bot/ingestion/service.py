@@ -16,7 +16,11 @@ from forest_bot.db.repositories.documents import DocumentInfo
 from forest_bot.embeddings import Embedder
 from forest_bot.forest import PLACES, Level, Place, find_places, find_question_places
 from forest_bot.ingestion.chunking import chunk_text
-from forest_bot.ingestion.extract import SUPPORTED_EXTENSIONS, extract_text
+from forest_bot.ingestion.extract import (
+    SUPPORTED_EXTENSIONS,
+    TooManyScannedPagesError,
+    extract_text,
+)
 from forest_bot.ingestion.placement import detect_place, document_type
 from forest_bot.llm.client import LLMBadResponseError, LLMBusyError, LLMClient
 from forest_bot.llm.prompts import PLACEMENT_SYSTEM, VERSION_SYSTEM
@@ -25,6 +29,11 @@ log = logging.getLogger(__name__)
 
 # The most a bot can download through the Bot API (D19)
 MAX_FILE_SIZE = 20 * 1024 * 1024
+# D29: bounds on one upload's work. Archive documents are one page each, far below these.
+MAX_OCR_PAGES = 20  # seconds of CPU per scanned page
+MAX_TEXT_CHARS = 200_000  # about a hundred pages; every chunk is embedded
+# Reading and embedding share the default thread pool with every question's embedding
+_HEAVY_UPLOADS_AT_ONCE = 2
 
 _INTRO_CHARS = 2000
 _MAX_PLACE_LINES = 30
@@ -66,6 +75,11 @@ class NoText:
 
 
 @dataclass(frozen=True)
+class TooLong:
+    """Too many scanned pages or too much text for one upload (D29)."""
+
+
+@dataclass(frozen=True)
 class NeedsSplit:
     places: list[Place]  # R20, D21
 
@@ -88,7 +102,7 @@ class Saved:
     replaced: DocumentInfo | None  # D11
 
 
-Outcome = Broken | NoText | NeedsSplit | NeedsPlace | AlreadyKnown | Saved
+Outcome = Broken | NoText | TooLong | NeedsSplit | NeedsPlace | AlreadyKnown | Saved
 
 
 class IngestionService:
@@ -97,6 +111,7 @@ class IngestionService:
         self._embedder = embedder
         self._llm = llm
         self._model = model
+        self._heavy_work = asyncio.Semaphore(_HEAVY_UPLOADS_AT_ONCE)
 
     async def receive(
         self, file_name: str, data: bytes, caption: str | None, author_id: int
@@ -112,14 +127,21 @@ class IngestionService:
 
     async def read(
         self, file_name: str, data: bytes, caption: str | None
-    ) -> PendingDocument | Broken | NoText:
+    ) -> PendingDocument | Broken | NoText | TooLong:
         try:
-            extracted = await asyncio.to_thread(extract_text, file_name, data)
+            async with self._heavy_work:
+                extracted = await asyncio.to_thread(extract_text, file_name, data, MAX_OCR_PAGES)
+        except TooManyScannedPagesError as e:
+            log.info("%s has %d scanned pages, refused", file_name, e.pages)
+            return TooLong()
         except Exception:
             log.exception("Cannot read %s", file_name)
             return Broken()
         if not extracted.text:
             return NoText()
+        if len(extracted.text) > MAX_TEXT_CHARS:
+            log.info("%s has %d characters, refused", file_name, len(extracted.text))
+            return TooLong()
         return PendingDocument(
             file_name=file_name,
             sha256=hashlib.sha256(data).hexdigest(),
@@ -183,15 +205,16 @@ class IngestionService:
             if duplicate is not None:
                 return AlreadyKnown(duplicate)
             doc_type = document_type(pending.title, place)
-            previous = await documents.find_active(conn, doc_type, place_code)
-            if previous is None:
-                candidates = await documents.list_active(conn, place_code=place_code)
-                previous = await self._previous_version(pending, candidates)
-                if previous is not None:
-                    doc_type = previous.doc_type
+            exact = await documents.find_active(conn, doc_type, place_code)
+            candidates = [] if exact else await documents.list_active(conn, place_code=place_code)
+        # The LLM may take minutes with retries: hold no connection meanwhile, the pool is small
+        previous = await self._previous_version(pending, candidates)
+        if previous is not None:
+            doc_type = previous.doc_type
 
         chunks = chunk_text(pending.title, pending.text)
-        embeddings = await self._embedder.embed(chunks)
+        async with self._heavy_work:
+            embeddings = await self._embedder.embed(chunks)
         doc = documents.NewDocument(
             title=pending.title,
             doc_type=doc_type,

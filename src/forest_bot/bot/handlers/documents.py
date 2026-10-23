@@ -25,6 +25,7 @@ from forest_bot.ingestion.service import (
     Outcome,
     PendingDocument,
     Saved,
+    TooLong,
     is_supported,
 )
 
@@ -97,6 +98,8 @@ async def reply_outcome(message: Message, pool: asyncpg.Pool, outcome: Outcome) 
             await message.answer(texts.needs_split(places))
         case NoText():
             await message.answer(texts.NO_TEXT)
+        case TooLong():
+            await message.answer(texts.TOO_LONG)
         case Broken():
             await message.answer(texts.BROKEN_FILE)
 
