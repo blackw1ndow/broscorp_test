@@ -7,6 +7,7 @@ from aiogram.fsm.context import FSMContext
 from aiogram.types import CallbackQuery, InlineKeyboardMarkup, Message
 
 from forest_bot.bot import texts
+from forest_bot.bot.edits import edit_text
 from forest_bot.bot.keyboards import (
     OWN_DOCUMENTS_PER_PAGE,
     DeleteDocument,
@@ -65,10 +66,10 @@ async def on_own_documents_page(
         docs = await documents.list_active(conn, author_id=callback.from_user.id)
     await callback.answer()
     if not docs:
-        await callback.message.edit_text(texts.NO_OWN_DOCUMENTS)
+        await edit_text(callback, texts.NO_OWN_DOCUMENTS)
         return
     text, markup = _own_page(docs, callback_data.page)
-    await callback.message.edit_text(text, reply_markup=markup)
+    await edit_text(callback, text, reply_markup=markup)
 
 
 def _own_page(docs: list[DocumentInfo], page: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -95,7 +96,7 @@ async def on_delete(
     await callback.answer()
     if remaining:
         text, markup = _own_page(remaining, callback_data.page)
-        await callback.message.edit_text(text, reply_markup=markup)
+        await edit_text(callback, text, reply_markup=markup)
     else:
-        await callback.message.edit_text(texts.NO_OWN_DOCUMENTS)
+        await edit_text(callback, texts.NO_OWN_DOCUMENTS)
     await callback.message.answer(texts.document_deleted(deleted.title, restored))

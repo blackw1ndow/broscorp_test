@@ -1,3 +1,4 @@
+import asyncio
 from datetime import timedelta
 
 import numpy as np
@@ -10,6 +11,7 @@ from forest_bot.db.fsm_storage import PostgresStorage
 from forest_bot.db.repositories import chunks, documents, messages, users
 from forest_bot.embeddings import DIMENSIONS
 from forest_bot.forest import applicable_places
+from forest_bot.ingestion import service as service_module
 from forest_bot.ingestion.service import AlreadyKnown, IngestionService, PendingDocument, Saved
 
 pytestmark = pytest.mark.db
@@ -93,6 +95,45 @@ async def test_llm_decides_a_version_when_titles_differ(pool, service):
         [active] = await documents.list_active(conn, place_code="pid_dubom")
     assert active.title == "Графік чергувань"
     assert active.doc_type == "чергування"
+
+
+@pytest.mark.parametrize(("replaces", "replaced"), [("1", True), (True, False)])
+async def test_version_number_from_the_llm_is_read_carefully(pool, service, replaces, replaced):
+    # Second review F4: the model sometimes writes numbers as strings; a bool is not a number
+    async with pool.acquire() as conn:
+        await _archive_doc(conn, "Чергування в рукавичці Під дубом", "чергування", "pid_dubom")
+    service._llm.complete_json.return_value = {"replaces": replaces}
+
+    saved = await service.save(_pending("Графік чергувань"), "pid_dubom", ANIMAL)
+
+    assert (saved.replaced is not None) is replaced
+
+
+async def test_two_versions_saved_at_once_leave_one_active(pool, service):
+    # Second review F5: both saves read the same current version inside their transactions
+    async with pool.acquire() as conn:
+        await _archive_doc(conn, "Членські внески Під дубом", "членські внески", "pid_dubom")
+
+    results = await asyncio.gather(
+        service.save(_pending("Членські внески", "sha-a"), "pid_dubom", ANIMAL),
+        service.save(_pending("Членські внески", "sha-b"), "pid_dubom", OTHER_ANIMAL),
+    )
+
+    assert all(isinstance(r, Saved) for r in results)
+    async with pool.acquire() as conn:
+        assert len(await documents.list_active(conn, place_code="pid_dubom")) == 1
+
+
+async def test_version_check_lists_a_bounded_number_of_candidates(pool, service):
+    # Second review F6: every active title of the place went into the prompt
+    async with pool.acquire() as conn:
+        for i in range(40):
+            await _archive_doc(conn, f"Порада {i:02} під дубом", f"порада {i:02}", "pid_dubom")
+
+    await service.save(_pending("Зовсім новий документ"), "pid_dubom", ANIMAL)
+
+    prompt = service._llm.complete_json.call_args.args[2]
+    assert prompt.count("«Порада") == service_module.MAX_VERSION_CANDIDATES
 
 
 async def test_version_check_holds_no_database_connection_while_asking_the_llm(pool, service):

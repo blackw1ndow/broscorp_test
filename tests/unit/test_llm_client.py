@@ -58,6 +58,16 @@ async def test_complete_json_gives_up_after_second_bad_reply(client):
         await llm.complete_json("m", "s", "u")
 
 
+async def test_request_too_large_becomes_busy_error(client):
+    # Second review F6: Groq answers 413 when one request exceeds the tokens-per-minute limit;
+    # callers already fall back on LLMBusyError instead of failing the whole update
+    llm, create = client
+    response = httpx.Response(413, request=httpx.Request("POST", "https://api.groq.com"))
+    create.side_effect = groq.APIStatusError("Request too large", response=response, body=None)
+    with pytest.raises(LLMBusyError):
+        await llm.complete_json("m", "s", "u")
+
+
 async def test_rate_limit_becomes_busy_error(client):
     # The SDK has already retried with retry-after by the time it raises
     llm, create = client

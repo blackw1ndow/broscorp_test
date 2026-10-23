@@ -102,6 +102,12 @@ def waiting_dropped(count: int) -> str:
     )
 
 
+def document_failed(file_name: str) -> str:
+    return (
+        f"Документ «{escape(file_name)}» не вдалося обробити. Надішліть його, будь ласка, ще раз."
+    )
+
+
 def unknown_mitten(name: str) -> str:
     return (
         f"Рукавички «{escape(name)}» на карті лісу немає. "

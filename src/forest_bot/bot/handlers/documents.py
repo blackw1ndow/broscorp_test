@@ -11,6 +11,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.chat_action import ChatActionSender
 
 from forest_bot.bot import texts
+from forest_bot.bot.edits import drop_keyboard
 from forest_bot.bot.keyboards import CANCEL, Dialog, DocumentPlace, document_places_keyboard
 from forest_bot.db.repositories import waiting
 from forest_bot.forest import PLACES
@@ -118,7 +119,8 @@ async def on_document_place(
         return
     async with pool.acquire() as conn:
         data = await waiting.take(conn, callback.from_user.id, waiting.PLACE, callback_data.id)
-    await callback.message.edit_reply_markup(reply_markup=None)
+    # Taken from waiting above: nothing may fail between here and saving it
+    await drop_keyboard(callback)
     if data is None:
         # Already chosen or cancelled, or dropped with /start (D28)
         await callback.answer(texts.STALE_BUTTON)

@@ -1,4 +1,7 @@
+import io
+
 import pytest
+from pypdf import PdfWriter
 
 from forest_bot.ingestion import extract
 from forest_bot.ingestion.extract import (
@@ -43,6 +46,27 @@ def test_too_many_scanned_pages_are_refused_before_ocr(mocker):
     with pytest.raises(TooManyScannedPagesError):
         extract_text("x.pdf", _archive("Членські внески рукавички У соснах.pdf"), max_ocr_pages=0)
     ocr.assert_not_called()
+
+
+def test_huge_scanned_page_is_rendered_within_a_pixel_budget(mocker):
+    # Second review F3: a blank A0 page at 300 DPI is ~140 million pixels; an animal's PDF
+    # may have up to 20 such pages, and two uploads run at once
+    writer = PdfWriter()
+    writer.add_blank_page(width=2384, height=3370)  # A0, no text: goes to OCR
+    writer.add_blank_page(width=595, height=842)  # A4
+    pdf = io.BytesIO()
+    writer.write(pdf)
+    sizes = []
+    mocker.patch.object(
+        extract, "ocr_image", side_effect=lambda image: sizes.append(image.size) or ""
+    )
+
+    extract_text("x.pdf", pdf.getvalue(), max_ocr_pages=20)
+
+    (a0_width, a0_height), (a4_width, a4_height) = sizes
+    assert a0_width * a0_height <= extract.OCR_MAX_PIXELS
+    # An ordinary page keeps the full 300 DPI
+    assert abs(a4_width - 595 * 300 / 72) <= 1 and abs(a4_height - 842 * 300 / 72) <= 1
 
 
 def test_docx_from_archive():

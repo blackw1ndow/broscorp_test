@@ -1,5 +1,6 @@
 """The animal's real name (R15, R15a) and changing it with /name (D14)."""
 
+import logging
 import re
 
 import asyncpg
@@ -13,6 +14,8 @@ from forest_bot.bot.handlers.documents import process_document
 from forest_bot.bot.keyboards import Dialog
 from forest_bot.db.repositories import users, waiting
 from forest_bot.ingestion.service import IngestionService
+
+log = logging.getLogger(__name__)
 
 router = Router(name="names")
 
@@ -76,6 +79,11 @@ async def _set_name(
         # Only the state: a question waiting for its mitten stays in the data
         await state.set_state(None)
     for file in files:
-        await process_document(
-            message, bot, ingestion, pool, file["file_id"], file["file_name"], file["caption"]
-        )
+        # They were all taken from waiting at once: one failure must not lose the others
+        try:
+            await process_document(
+                message, bot, ingestion, pool, file["file_id"], file["file_name"], file["caption"]
+            )
+        except Exception:
+            log.exception("Document %s waiting for the name failed", file["file_name"])
+            await message.answer(texts.document_failed(file["file_name"]))

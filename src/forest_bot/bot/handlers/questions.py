@@ -7,6 +7,7 @@ from aiogram.types import CallbackQuery, Message
 from aiogram.utils.chat_action import ChatActionSender
 
 from forest_bot.bot import texts
+from forest_bot.bot.edits import edit_text
 from forest_bot.bot.keyboards import Dialog, QuestionPlace, mittens_keyboard
 from forest_bot.forest import PLACES
 from forest_bot.qa.service import QAService
@@ -63,7 +64,7 @@ async def on_question_mitten(
     if await state.get_state() == Dialog.question_mitten.state:
         await state.set_state(None)
     await callback.answer()
-    await callback.message.edit_text(f"{texts.ASK_MITTEN}\n— {place.name}")
+    await edit_text(callback, f"{texts.ASK_MITTEN}\n— {place.name}")
     async with ChatActionSender.typing(bot=bot, chat_id=callback.message.chat.id):
         await _answer(
             callback.message,

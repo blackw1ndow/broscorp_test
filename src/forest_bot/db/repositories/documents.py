@@ -163,6 +163,14 @@ async def doc_types_by_level(conn: asyncpg.Connection) -> dict[str, list[str]]:
     return result
 
 
+async def lock_version(conn: asyncpg.Connection, doc_type: str, place_code: str) -> None:
+    """Serialises saving versions of one document type for one place until the transaction
+    ends. Call inside the transaction, before reading the current version."""
+    await conn.execute(
+        "SELECT pg_advisory_xact_lock(hashtext($1))", f"version:{place_code}:{doc_type}"
+    )
+
+
 async def supersede(conn: asyncpg.Connection, document_id: int) -> bool:
     """Marks the old version as replaced (R11). Call inside the transaction of the new insert."""
     status = await conn.execute(

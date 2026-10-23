@@ -4,6 +4,7 @@ import io
 from datetime import datetime
 
 import pytest
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.storage.base import StorageKey
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -319,6 +320,61 @@ async def test_name_command_does_not_drop_a_waiting_document(
     ingestion.save.assert_awaited_once_with(_pending(), "pid_dubom", USER_ID)
 
 
+def _not_modified(mocker) -> TelegramBadRequest:
+    return TelegramBadRequest(mocker.MagicMock(), "Bad Request: message is not modified")
+
+
+async def test_place_is_saved_even_if_the_keyboard_cannot_be_removed(
+    mocker, bot, pool, waiting_docs
+):
+    # Second review F1: on a double tap the other press removes the keyboard first, so this
+    # edit fails; the document is already taken from waiting and must still be saved
+    waiting_id = await waiting_docs.add(None, USER_ID, waiting.PLACE, _pending().to_state())
+    ingestion = mocker.AsyncMock()
+    ingestion.save.return_value = Saved("Членські внески", "pid_dubom", None)
+    callback = _callback(mocker, _message(mocker))
+    callback.message.edit_reply_markup.side_effect = _not_modified(mocker)
+
+    await documents.on_document_place(
+        callback, DocumentPlace(id=waiting_id, code="pid_dubom"), bot, ingestion, pool
+    )
+
+    ingestion.save.assert_awaited_once_with(_pending(), "pid_dubom", USER_ID)
+
+
+async def test_stale_press_on_a_keyboard_already_removed_is_quiet(mocker, bot, pool, waiting_docs):
+    callback = _callback(mocker, _message(mocker))
+    callback.message.edit_reply_markup.side_effect = _not_modified(mocker)
+
+    await documents.on_document_place(
+        callback, DocumentPlace(id=99, code="pid_dubom"), bot, mocker.AsyncMock(), pool
+    )
+
+    callback.answer.assert_awaited_once_with(texts.STALE_BUTTON)
+
+
+async def test_one_failing_document_does_not_lose_the_others(
+    mocker, state, bot, pool, waiting_docs
+):
+    # Second review F2: all documents waiting for the name are taken at once
+    mocker.patch.object(names.users, "set_display_name", mocker.AsyncMock())
+    ingestion = mocker.AsyncMock()
+    for file_name in ("Внески.txt", "Стежки.txt"):
+        message = _message(mocker, document=_document(mocker, file_name))
+        await documents.on_document(message, state, bot, ingestion, pool, user_name=None)
+    ingestion.receive.side_effect = [
+        RuntimeError("download failed"),
+        Saved("Стежки до сусідів", "pid_dubom", None),
+    ]
+    message = _message(mocker, text="Зайчик-побігайчик")
+
+    await names.on_name(message, state, bot, pool, ingestion)
+
+    assert ingestion.receive.await_count == 2
+    assert texts.document_failed("Внески.txt") in _replies(message)
+    assert _replies(message)[-1] == texts.document_saved("Стежки до сусідів", "pid_dubom", None)
+
+
 async def test_cancel_drops_the_pending_document(mocker, bot, pool, waiting_docs):
     waiting_id = await waiting_docs.add(None, USER_ID, waiting.PLACE, _pending().to_state())
     ingestion = mocker.AsyncMock()
@@ -390,6 +446,17 @@ async def test_many_own_documents_are_shown_page_by_page(mocker, pool):
 
     shown = callback.message.edit_text.call_args.args[0]
     assert "011 " in shown and "020 " in shown and "001 " not in shown
+
+
+async def test_same_page_pressed_twice_is_quiet(mocker, pool):
+    # Second review F1: editing to identical content is an error in Telegram
+    mocker.patch.object(commands.documents, "list_active", return_value=_own_docs(25))
+    callback = _callback(mocker, _message(mocker))
+    callback.message.edit_text.side_effect = _not_modified(mocker)
+
+    await commands.on_own_documents_page(callback, OwnDocumentsPage(page=1), pool)
+
+    callback.answer.assert_awaited_once()
 
 
 async def test_deleting_keeps_the_list_on_its_page(mocker, pool):

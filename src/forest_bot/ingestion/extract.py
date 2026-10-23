@@ -21,6 +21,9 @@ SUPPORTED_EXTENSIONS = (".pdf", ".docx", ".txt")
 # A page with less text than this is treated as a scan
 _MIN_PAGE_TEXT = 20
 _OCR_DPI = 300
+# A page renders to width × height × (DPI / 72)² pixels: A4 at 300 DPI is ~8.7 million, a blank
+# A0 page ~140 million. Bigger pages are rendered at a lower DPI, so memory stays bounded.
+OCR_MAX_PIXELS = 25_000_000
 # Scans in the archive have grey blotches on the background; the text is much darker
 _OCR_THRESHOLD = 120
 _OCR_MIN_CONFIDENCE = 60
@@ -96,12 +99,24 @@ def _pdf_text(data: bytes, max_ocr_pages: int | None) -> ExtractedText:
         pdf = pypdfium2.PdfDocument(data)
         try:
             for index in ocr_pages:
-                pages[index] = ocr_image(pdf[index].render(scale=_OCR_DPI / 72).to_pil())
+                page = pdf[index]
+                scale = _render_scale(*page.get_size())
+                pages[index] = ocr_image(page.render(scale=scale).to_pil())
         finally:
             pdf.close()
 
     method = ExtractionMethod.OCR if ocr_pages else ExtractionMethod.TEXT
     return ExtractedText(_clean("\n\n".join(pages)), method)
+
+
+def _render_scale(width_pt: float, height_pt: float) -> float:
+    """300 DPI, lowered just enough for the page to fit into OCR_MAX_PIXELS."""
+    scale = _OCR_DPI / 72
+    pixels = width_pt * height_pt * scale * scale
+    if pixels > OCR_MAX_PIXELS:
+        # 1% below the bound: pdfium rounds the rendered size up
+        scale *= (OCR_MAX_PIXELS / pixels) ** 0.5 * 0.99
+    return scale
 
 
 def ocr_image(image: Image.Image) -> str:

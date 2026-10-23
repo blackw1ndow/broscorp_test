@@ -48,6 +48,11 @@ class LLMClient:
                     raise LLMBadResponseError(str(e)) from e
                 log.warning("Groq rejected the reply (%s), retrying", e)
                 continue
+            except groq.APIStatusError as e:
+                # 413: one request is over the tokens-per-minute limit; callers fall back
+                if e.status_code == 413:
+                    raise LLMBusyError(str(e)) from e
+                raise
 
             content = response.choices[0].message.content or ""
             try:

@@ -32,6 +32,8 @@ MAX_FILE_SIZE = 20 * 1024 * 1024
 # D29: bounds on one upload's work. Archive documents are one page each, far below these.
 MAX_OCR_PAGES = 20  # seconds of CPU per scanned page
 MAX_TEXT_CHARS = 200_000  # about a hundred pages; every chunk is embedded
+# The version check lists the place's active titles; the newest are the likely predecessors
+MAX_VERSION_CANDIDATES = 30
 # Reading and embedding share the default thread pool with every question's embedding
 _HEAVY_UPLOADS_AT_ONCE = 2
 
@@ -229,7 +231,9 @@ class IngestionService:
             uploaded_at=datetime.now(KYIV_TZ),
         )
         async with self._pool.acquire() as conn, conn.transaction():
-            # Re-read under the transaction: someone may have replaced it in the meantime
+            # Two saves of the same type and place at once (an album, two animals) would both
+            # supersede the same version and break the one-active-version index: queue them
+            await documents.lock_version(conn, doc_type, place_code)
             current = await documents.find_active(conn, doc_type, place_code)
             if current is not None:
                 await documents.supersede(conn, current.id)
@@ -245,6 +249,9 @@ class IngestionService:
         """No exact type match: ask the LLM whether it is a new version of one of them (D24)."""
         if not candidates:
             return None
+        # Bounded: every active title of a busy place would outgrow the request limit
+        candidates = sorted(candidates, key=lambda c: c.uploaded_at, reverse=True)
+        candidates = candidates[:MAX_VERSION_CANDIDATES]
         listing = "\n".join(f"{i}. «{c.title}»" for i, c in enumerate(candidates, start=1))
         prompt = (
             f"Новий документ «{pending.title}»:\n{pending.text[:600]}\n\n"
@@ -256,7 +263,11 @@ class IngestionService:
             log.warning("LLM version check failed for %s; saving as a new document", pending.title)
             return None
         number = raw.get("replaces")
-        if isinstance(number, int) and 1 <= number <= len(candidates):
+        # The model sometimes writes numbers as strings; true/false are not numbers here
+        if isinstance(number, str) and number.strip().isdigit():
+            number = int(number)
+        is_number = isinstance(number, int) and not isinstance(number, bool)
+        if is_number and 1 <= number <= len(candidates):
             return candidates[number - 1]
         return None
 
