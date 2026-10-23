@@ -4,6 +4,10 @@
 
 ## 1. Загальна схема
 
+![Як бот працює з файлом і з питанням](architecture.png)
+
+Джерело діаграми — [`architecture.excalidraw`](architecture.excalidraw), відкривається на excalidraw.com.
+
 ```mermaid
 flowchart LR
     TG[Telegram] -->|long polling| BOT[bot: aiogram]
