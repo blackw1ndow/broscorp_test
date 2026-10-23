@@ -16,3 +16,9 @@ htmlcov/
 # IDE
 .idea/
 .vscode/
+
+# Local issue tracker for agent skills (see docs/agents/issue-tracker.md)
+.scratch/
+
+# Third-party agent skills, installed locally
+.claude/skills/
