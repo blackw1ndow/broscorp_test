@@ -59,3 +59,124 @@ async def insert_document(
         ],
     )
     return document_id
+
+
+@dataclass(frozen=True)
+class DocumentInfo:
+    id: int
+    title: str
+    doc_type: str
+    place_code: str
+    source: str
+    author: str | None  # the author's current real name (D14); None for the archive
+    uploaded_at: datetime
+
+
+_INFO_COLUMNS = """
+    d.id, d.title, d.doc_type, d.place_code, d.source, u.display_name AS author, d.uploaded_at
+"""
+_INFO_FROM = "FROM documents d LEFT JOIN users u ON u.telegram_id = d.author_id"
+
+
+def _info(row: asyncpg.Record | None) -> DocumentInfo | None:
+    return DocumentInfo(**dict(row)) if row else None
+
+
+async def find_active(
+    conn: asyncpg.Connection, doc_type: str, place_code: str
+) -> DocumentInfo | None:
+    row = await conn.fetchrow(
+        f"SELECT {_INFO_COLUMNS} {_INFO_FROM}"
+        " WHERE d.status = 'active' AND d.doc_type = $1 AND d.place_code = $2",
+        doc_type,
+        place_code,
+    )
+    return _info(row)
+
+
+async def find_active_by_hash(
+    conn: asyncpg.Connection, file_sha256: str, place_code: str
+) -> DocumentInfo | None:
+    row = await conn.fetchrow(
+        f"SELECT {_INFO_COLUMNS} {_INFO_FROM}"
+        " WHERE d.status = 'active' AND d.file_sha256 = $1 AND d.place_code = $2",
+        file_sha256,
+        place_code,
+    )
+    return _info(row)
+
+
+async def list_active(
+    conn: asyncpg.Connection, place_code: str | None = None, author_id: int | None = None
+) -> list[DocumentInfo]:
+    rows = await conn.fetch(
+        f"SELECT {_INFO_COLUMNS} {_INFO_FROM}"
+        """
+        WHERE d.status = 'active'
+          AND ($1::text IS NULL OR d.place_code = $1)
+          AND ($2::bigint IS NULL OR d.author_id = $2)
+        ORDER BY d.title
+        """,
+        place_code,
+        author_id,
+    )
+    return [DocumentInfo(**dict(row)) for row in rows]
+
+
+async def doc_types_by_level(conn: asyncpg.Connection) -> dict[str, list[str]]:
+    """Active document types grouped by place level: tells the router which advice differs
+    between places (R10a)."""
+    rows = await conn.fetch(
+        """
+        SELECT p.level, d.doc_type
+        FROM documents d JOIN places p ON p.code = d.place_code
+        WHERE d.status = 'active'
+        GROUP BY p.level, d.doc_type
+        ORDER BY p.level, d.doc_type
+        """
+    )
+    result: dict[str, list[str]] = {}
+    for row in rows:
+        result.setdefault(row["level"], []).append(row["doc_type"])
+    return result
+
+
+async def supersede(conn: asyncpg.Connection, document_id: int) -> bool:
+    """Marks the old version as replaced (R11). Call inside the transaction of the new insert."""
+    status = await conn.execute(
+        "UPDATE documents SET status = 'superseded' WHERE id = $1 AND status = 'active'",
+        document_id,
+    )
+    return status == "UPDATE 1"
+
+
+async def delete_own(
+    conn: asyncpg.Connection, document_id: int, author_id: int
+) -> tuple[DocumentInfo | None, DocumentInfo | None]:
+    """Deletes an active document of this author (D5) and makes the version it replaced active
+    again (D25). Returns (deleted, restored). Call inside a transaction."""
+    deleted = await conn.fetchrow(
+        """
+        UPDATE documents SET status = 'deleted'
+        WHERE id = $1 AND author_id = $2 AND status = 'active'
+        RETURNING id, replaces_id
+        """,
+        document_id,
+        author_id,
+    )
+    if deleted is None:
+        return None, None
+    restored = None
+    if deleted["replaces_id"] is not None:
+        status = await conn.execute(
+            "UPDATE documents SET status = 'active' WHERE id = $1 AND status = 'superseded'",
+            deleted["replaces_id"],
+        )
+        if status == "UPDATE 1":
+            restored = await get_info(conn, deleted["replaces_id"])
+    return await get_info(conn, document_id), restored
+
+
+async def get_info(conn: asyncpg.Connection, document_id: int) -> DocumentInfo | None:
+    row = await conn.fetchrow(f"SELECT {_INFO_COLUMNS} {_INFO_FROM} WHERE d.id = $1", document_id)
+    return _info(row)

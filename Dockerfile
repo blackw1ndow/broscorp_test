@@ -30,5 +30,6 @@ RUN python -m forest_bot.embeddings
 COPY migrations ./migrations
 COPY archive ./archive
 COPY tests ./tests
+COPY scripts ./scripts
 
 CMD ["python", "-m", "forest_bot"]
