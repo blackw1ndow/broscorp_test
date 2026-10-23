@@ -8,15 +8,20 @@ from aiogram.types import CallbackQuery, Message
 
 from forest_bot.bot import texts
 from forest_bot.bot.keyboards import DeleteDocument, delete_keyboard
-from forest_bot.db.repositories import documents
+from forest_bot.db.repositories import documents, waiting
 
 router = Router(name="commands")
 
 
 @router.message(CommandStart())
-async def on_start(message: Message, state: FSMContext) -> None:
+async def on_start(message: Message, state: FSMContext, pool: asyncpg.Pool) -> None:
+    # Begin again (D28): forget the waiting question and documents, and say what was dropped
     await state.clear()
+    async with pool.acquire() as conn:
+        dropped = await waiting.drop_all(conn, message.from_user.id)
     await message.answer(texts.START)
+    if dropped:
+        await message.answer(texts.waiting_dropped(dropped))
 
 
 @router.message(Command("help"))

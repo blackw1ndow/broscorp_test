@@ -89,6 +89,13 @@ NO_OWN_DOCUMENTS = "Ви ще не надсилали документів. На
 UNKNOWN_COMMAND = "Не знаю такої команди. Що я вмію — /help"
 
 
+def waiting_dropped(count: int) -> str:
+    return (
+        f"Документи, що чекали на місце чи ваше ім'я, я не зберіг (їх було: {count}). "
+        "Якщо вони потрібні — надішліть їх ще раз."
+    )
+
+
 def unknown_mitten(name: str) -> str:
     return (
         f"Рукавички «{escape(name)}» на карті лісу немає. "

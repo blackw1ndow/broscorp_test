@@ -11,7 +11,7 @@ from aiogram.types import Message
 from forest_bot.bot import texts
 from forest_bot.bot.handlers.documents import process_document
 from forest_bot.bot.keyboards import Dialog
-from forest_bot.db.repositories import users
+from forest_bot.db.repositories import users, waiting
 from forest_bot.ingestion.service import IngestionService
 
 router = Router(name="names")
@@ -68,14 +68,14 @@ async def _set_name(
         return
     async with pool.acquire() as conn:
         await users.set_display_name(conn, message.from_user.id, name)
+        # Documents sent before the animal had a name: all of them, not only the last (D26)
+        files = await waiting.take_all(conn, message.from_user.id, waiting.NAME)
     await message.answer(texts.name_saved(name))
 
-    # The first document was waiting for the name: carry on with it
-    if await state.get_state() == Dialog.name_for_document.state:
-        data = await state.get_data()
-        await state.clear()
+    if await state.get_state() in (Dialog.name.state, Dialog.name_for_document.state):
+        # Only the state: a question waiting for its mitten stays in the data
+        await state.set_state(None)
+    for file in files:
         await process_document(
-            message, state, bot, ingestion, data["file_id"], data["file_name"], data["caption"]
+            message, bot, ingestion, pool, file["file_id"], file["file_name"], file["caption"]
         )
-    elif await state.get_state() == Dialog.name.state:
-        await state.clear()

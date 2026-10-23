@@ -28,15 +28,23 @@ async def on_question(message: Message, state: FSMContext, bot: Bot, qa: QAServi
         if route.must_ask_place:
             await qa.remember_clarification(user_id, message.text, texts.ASK_MITTEN)
             await state.set_state(Dialog.question_mitten)
-            await state.set_data({"question": route.question, "doc_types": route.doc_types})
-            await message.answer(texts.ASK_MITTEN, reply_markup=mittens_keyboard())
+            await state.set_data(
+                {
+                    "question": route.question,
+                    "doc_types": route.doc_types,
+                    "asked_in": message.message_id,
+                }
+            )
+            await message.answer(
+                texts.ASK_MITTEN, reply_markup=mittens_keyboard(message.message_id)
+            )
             return
         await _answer(
             message, qa, user_id, message.text, route.question, route.place, route.doc_types
         )
 
 
-@router.callback_query(Dialog.question_mitten, QuestionPlace.filter())
+@router.callback_query(QuestionPlace.filter())
 async def on_question_mitten(
     callback: CallbackQuery,
     callback_data: QuestionPlace,
@@ -44,12 +52,16 @@ async def on_question_mitten(
     bot: Bot,
     qa: QAService,
 ) -> None:
+    # Not filtered by state: /name or a document may change what the next text means,
+    # but the question keeps waiting (D26). Only the last question's buttons work.
     place = PLACES.get(callback_data.code)
-    if place is None:
+    data = await state.get_data()
+    if place is None or data.get("asked_in") != callback_data.asked_in:
         await callback.answer(texts.STALE_BUTTON)
         return
-    data = await state.get_data()
-    await state.clear()
+    await state.set_data({})
+    if await state.get_state() == Dialog.question_mitten.state:
+        await state.set_state(None)
     await callback.answer()
     await callback.message.edit_text(f"{texts.ASK_MITTEN}\n— {place.name}")
     async with ChatActionSender.typing(bot=bot, chat_id=callback.message.chat.id):
@@ -62,11 +74,6 @@ async def on_question_mitten(
             place.code,
             tuple(data.get("doc_types", ())),
         )
-
-
-@router.callback_query(QuestionPlace.filter())
-async def on_stale_question_mitten(callback: CallbackQuery) -> None:
-    await callback.answer(texts.STALE_BUTTON)
 
 
 async def _answer(

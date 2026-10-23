@@ -1,4 +1,4 @@
-"""aiogram FSM storage in Postgres: a pending question or document survives a bot restart."""
+"""aiogram FSM storage in Postgres: a question waiting for its mitten survives a restart."""
 
 import json
 from collections.abc import Mapping
